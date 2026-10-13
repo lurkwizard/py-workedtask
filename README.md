@@ -25,7 +25,7 @@ Run tests with `python -m unittest discover -s tests`.
 1. **CRC32** against a build-time constant `JAVELIN_EXPECTED_CRC32`. If the
    constant is `0`, the check is skipped.
 2. **SHA-256** against the `JAVELIN_EXPECTED_SHA256` environment variable, or
-   against a build-time string `-DJAVELIN_EXPECTED_SHA256_STR=\"<hex>\"`.
+   against a build-time string (`-DJAVELIN_EXPECTED_SHA256_STR='"<hex>"'`).
    The env var wins when set. A mismatch exits with code `3` (same as Python).
 
 Build (MinGW cross-compile example):
@@ -45,5 +45,5 @@ AntiCheat.exe
 Portable SHA-256 lives in `sha256.hpp`. Native vector tests (no Windows needed):
 
 ```sh
-g++ -std=c++17 -O2 -o test_sha256 tests/test_sha256.cpp && ./test_sha256
+g++ -std=c++17 -O2 -o tests/test_sha256 tests/test_sha256.cpp && ./tests/test_sha256
 ```
