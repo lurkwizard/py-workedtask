@@ -1,0 +1,98 @@
+name: Windows
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python unit tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
+
+      - name: Build with MSVC and run SHA-256 vectors
+        shell: cmd
+        run: |
+          set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+          if not exist "%VSWHERE%" exit /b 1
+          for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo vswhere did not find a VC installation
+            exit /b 1
+          )
+          echo Using %VSINSTALL%
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /O2 /W3 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /Fe:AntiCheat.exe AntiCheat.cpp
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /O2 /W3 /Fe:test_sha256.exe tests\test_sha256.cpp
+          if errorlevel 1 exit /b 1
+          test_sha256.exe
+          if errorlevel 1 exit /b 1
+
+      - name: Smoke test SHA-256 exit codes
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\AntiCheat.exe).Hash.ToLowerInvariant()
+          if ($hash.Length -ne 64) { throw "unexpected hash length: $hash" }
+          Write-Host "SHA-256 AntiCheat.exe = $hash"
+
+          $env:JAVELIN_EXPECTED_SHA256 = $hash
+          & .\AntiCheat.exe
+          $pass = $LASTEXITCODE
+          Write-Host "correct hash exit code: $pass"
+          if ($pass -ne 0) { throw "expected exit 0 for the matching hash, got $pass" }
+
+          $env:JAVELIN_EXPECTED_SHA256 = ('0' * 64)
+          & .\AntiCheat.exe
+          $fail = $LASTEXITCODE
+          Write-Host "wrong hash exit code: $fail"
+          if ($fail -ne 3) { throw "expected exit 3 for a wrong hash, got $fail" }
+
+          Write-Host "smoke test passed"
+
+  mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build with MinGW and run SHA-256 vectors
+        shell: msys2 {0}
+        run: |
+          set -eu
+          g++ -std=c++17 -O2 -static -o AntiCheat.exe AntiCheat.cpp
+          g++ -std=c++17 -O2 -static -o test_sha256.exe tests/test_sha256.cpp
+          ./test_sha256.exe
+
+      - name: Smoke test SHA-256 exit codes
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\AntiCheat.exe).Hash.ToLowerInvariant()
+          if ($hash.Length -ne 64) { throw "unexpected hash length: $hash" }
+          Write-Host "SHA-256 AntiCheat.exe = $hash"
+
+          $env:JAVELIN_EXPECTED_SHA256 = $hash
+          & .\AntiCheat.exe
+          $pass = $LASTEXITCODE
+          Write-Host "correct hash exit code: $pass"
+          if ($pass -ne 0) { throw "expected exit 0 for the matching hash, got $pass" }
+
+          $env:JAVELIN_EXPECTED_SHA256 = ('0' * 64)
+          & .\AntiCheat.exe
+          $fail = $LASTEXITCODE
+          Write-Host "wrong hash exit code: $fail"
+          if ($fail -ne 3) { throw "expected exit 3 for a wrong hash, got $fail" }
+
+          Write-Host "smoke test passed"

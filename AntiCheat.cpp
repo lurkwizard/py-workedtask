@@ -3,10 +3,14 @@
 // Features: debugger detection, suspicious process scan,
 //           self-integrity (CRC32 build-time and/or SHA-256 of the running executable)
 
+// Avoid min/max macros from windows.h breaking the C++ standard library.
+#define NOMINMAX
 #include <windows.h>
 #include <tlhelp32.h>
+#if defined(_MSC_VER)
+#include <intrin.h>  // _readfsdword / _readgsqword
+#endif
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -43,6 +47,20 @@ static std::string toLower(std::string s) {
     return s;
 }
 
+// Python integrity.py uses str.strip() before comparing. Match the ASCII
+// whitespace it strips so both sides accept the same env value.
+static bool isAsciiSpace(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static std::string trimAscii(const std::string& s) {
+    size_t begin = 0;
+    size_t end = s.size();
+    while (begin < end && isAsciiSpace(static_cast<unsigned char>(s[begin]))) ++begin;
+    while (end > begin && isAsciiSpace(static_cast<unsigned char>(s[end - 1]))) --end;
+    return s.substr(begin, end - begin);
+}
+
 // Simple CRC32 (polynomial 0xEDB88320)
 static uint32_t crc32(const std::vector<uint8_t>& data) {
     uint32_t crc = 0xFFFFFFFFu;
@@ -57,24 +75,59 @@ static uint32_t crc32(const std::vector<uint8_t>& data) {
 }
 
 static bool readFile(const std::wstring& path, std::vector<uint8_t>& out) {
-    // Use c_str() so MinGW's ifstream accepts a wide path.
-    std::ifstream f(path.c_str(), std::ios::binary);
-    if (!f) return false;
-    f.seekg(0, std::ios::end);
-    std::streamsize size = f.tellg();
-    if (size <= 0) return false;
-    f.seekg(0, std::ios::beg);
-    out.resize(static_cast<size_t>(size));
-    if (!f.read(reinterpret_cast<char*>(out.data()), size)) return false;
+    // Win32 read (not ifstream) so MSVC and MinGW both open a wide path in
+    // binary mode, including the image the loader already has mapped.
+    HANDLE file = CreateFileW(
+        path.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) {
+        CloseHandle(file);
+        return false;
+    }
+    const unsigned long long nbytes = static_cast<unsigned long long>(size.QuadPart);
+    if (nbytes > static_cast<unsigned long long>(static_cast<size_t>(-1))) {
+        CloseHandle(file);
+        return false;
+    }
+
+    out.resize(static_cast<size_t>(nbytes));
+    unsigned long long offset = 0;
+    while (offset < nbytes) {
+        const unsigned long long remain = nbytes - offset;
+        const DWORD chunk = remain > 0x100000ull ? 0x100000u : static_cast<DWORD>(remain);
+        DWORD got = 0;
+        if (!ReadFile(file, out.data() + offset, chunk, &got, nullptr) || got == 0) {
+            CloseHandle(file);
+            return false;
+        }
+        offset += got;
+    }
+    CloseHandle(file);
     return true;
 }
 
 static bool getSelfPath(std::wstring& out) {
-    wchar_t path[MAX_PATH]{};
-    DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return false;
-    out.assign(path, n);
-    return true;
+    // Grow past MAX_PATH. A truncated path would fail the integrity check closed.
+    DWORD cap = MAX_PATH;
+    for (;;) {
+        out.resize(cap);
+        DWORD n = GetModuleFileNameW(nullptr, &out[0], cap);
+        if (n == 0) return false;
+        if (n < cap) {
+            out.resize(n);
+            return true;
+        }
+        if (cap >= 32768) return false;
+        cap *= 2;
+    }
 }
 
 static bool constantTimeEqualHex(const std::string& a, const std::string& b) {
@@ -87,23 +140,36 @@ static bool constantTimeEqualHex(const std::string& a, const std::string& b) {
 }
 
 // --- Checks ---
-static bool checkDebugger() {
-    if (IsDebuggerPresent()) return true;
-
-    // Secondary anti-debug: CheckBeingDebugged flag in PEB (MSVC only)
+// SEH must live in a function the compiler will not inline into main().
+// main() has C++ locals, and MSVC rejects __try there (C2712).
+#if defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static bool pebBeingDebugged() {
 #if defined(_MSC_VER) && defined(_M_IX86)
     __try {
-        BYTE* peb = *(BYTE**)_readfsdword(0x30);
-        if (peb && peb[2]) return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        // fs:[0x30] is already the PEB address; do not dereference it again.
+        BYTE* peb = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(_readfsdword(0x30)));
+        return peb && peb[2];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 #elif defined(_MSC_VER) && defined(_M_X64)
     __try {
-        BYTE* peb = *(BYTE**)_readgsqword(0x60);
-        if (peb && peb[2]) return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-#endif
-
+        // gs:[0x60] is already the PEB address; do not dereference it again.
+        BYTE* peb = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(_readgsqword(0x60)));
+        return peb && peb[2];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+#else
     return false;
+#endif
+}
+
+static bool checkDebugger() {
+    if (IsDebuggerPresent()) return true;
+    return pebBeingDebugged();
 }
 
 static bool checkSuspiciousProcesses() {
@@ -153,6 +219,10 @@ static bool checkSelfIntegrityCrc(uint32_t expectedCrc) {
 static bool checkSelfIntegritySha256(const std::string& expectedHex) {
     if (expectedHex.empty()) return true;
 
+    // Same contract as integrity.py: strip surrounding whitespace, then
+    // compare case-insensitively. A whitespace-only value is a mismatch.
+    const std::string expected = toLower(trimAscii(expectedHex));
+
     std::wstring path;
     if (!getSelfPath(path)) return false;
 
@@ -160,7 +230,7 @@ static bool checkSelfIntegritySha256(const std::string& expectedHex) {
     if (!readFile(path, bytes)) return false;
 
     std::string actual = javelin::Sha256::hashHex(bytes);
-    return constantTimeEqualHex(actual, toLower(expectedHex));
+    return constantTimeEqualHex(actual, expected);
 }
 
 static std::string resolveExpectedSha256() {

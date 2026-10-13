@@ -25,6 +25,10 @@ class IntegrityTests(unittest.TestCase):
     def test_match(self):
         self.assertTrue(integrity.verify_integrity(self.path, self.digest.upper()))
 
+    def test_surrounding_whitespace(self):
+        padded = " \t" + self.digest.upper() + "\r\n"
+        self.assertTrue(integrity.verify_integrity(self.path, padded))
+
     def test_mismatch_exits(self):
         with self.assertRaises(SystemExit) as cm:
             integrity.guard(self.path, "0" * 64)
