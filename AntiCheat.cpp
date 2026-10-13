@@ -8,7 +8,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #if defined(_MSC_VER)
-#include <intrin.h>  // _readfsdword / _readgsqword
+#include <intrin.h>  // __readfsdword / __readgsqword
 #endif
 #include <iostream>
 #include <vector>
@@ -67,7 +67,8 @@ static uint32_t crc32(const std::vector<uint8_t>& data) {
     for (uint8_t b : data) {
         crc ^= b;
         for (int i = 0; i < 8; ++i) {
-            uint32_t mask = -(crc & 1u);
+            // (crc & 1) ? 0xFFFFFFFF : 0, without negating an unsigned value.
+            const uint32_t mask = (crc & 1u) ? 0xFFFFFFFFu : 0u;
             crc = (crc >> 1) ^ (0xEDB88320u & mask);
         }
     }
@@ -149,7 +150,7 @@ static bool pebBeingDebugged() {
 #if defined(_MSC_VER) && defined(_M_IX86)
     __try {
         // fs:[0x30] is already the PEB address; do not dereference it again.
-        BYTE* peb = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(_readfsdword(0x30)));
+        BYTE* peb = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(__readfsdword(0x30)));
         return peb && peb[2];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -157,7 +158,7 @@ static bool pebBeingDebugged() {
 #elif defined(_MSC_VER) && defined(_M_X64)
     __try {
         // gs:[0x60] is already the PEB address; do not dereference it again.
-        BYTE* peb = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(_readgsqword(0x60)));
+        BYTE* peb = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(__readgsqword(0x60)));
         return peb && peb[2];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

@@ -27,7 +27,7 @@ jobs:
           echo Using %VSINSTALL%
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
-          cl /nologo /std:c++17 /EHsc /O2 /W3 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /Fe:AntiCheat.exe AntiCheat.cpp
+          cl /nologo /std:c++17 /EHsc /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /Fe:AntiCheat.exe AntiCheat.cpp
           if errorlevel 1 exit /b 1
           cl /nologo /std:c++17 /EHsc /O2 /W3 /Fe:test_sha256.exe tests\test_sha256.cpp
           if errorlevel 1 exit /b 1
@@ -35,26 +35,26 @@ jobs:
           if errorlevel 1 exit /b 1
 
       - name: Smoke test SHA-256 exit codes
-        shell: pwsh
+        shell: cmd
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\AntiCheat.exe).Hash.ToLowerInvariant()
-          if ($hash.Length -ne 64) { throw "unexpected hash length: $hash" }
-          Write-Host "SHA-256 AntiCheat.exe = $hash"
-
-          $env:JAVELIN_EXPECTED_SHA256 = $hash
-          & .\AntiCheat.exe
-          $pass = $LASTEXITCODE
-          Write-Host "correct hash exit code: $pass"
-          if ($pass -ne 0) { throw "expected exit 0 for the matching hash, got $pass" }
-
-          $env:JAVELIN_EXPECTED_SHA256 = ('0' * 64)
-          & .\AntiCheat.exe
-          $fail = $LASTEXITCODE
-          Write-Host "wrong hash exit code: $fail"
-          if ($fail -ne 3) { throw "expected exit 3 for a wrong hash, got $fail" }
-
-          Write-Host "smoke test passed"
+          python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('AntiCheat.exe').read_bytes()).hexdigest())" > hash.txt
+          if errorlevel 1 exit /b 1
+          set /p HASH=<hash.txt
+          echo SHA-256 AntiCheat.exe = %HASH%
+          if "%HASH:~64,1%" NEQ "" exit /b 1
+          if "%HASH:~63,1%"=="" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=%HASH%"
+          AntiCheat.exe
+          set "PASS=%ERRORLEVEL%"
+          echo correct hash exit code: %PASS%
+          if not "%PASS%"=="0" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=0000000000000000000000000000000000000000000000000000000000000000"
+          AntiCheat.exe
+          set "FAIL=%ERRORLEVEL%"
+          echo wrong hash exit code: %FAIL%
+          if not "%FAIL%"=="3" exit /b 1
+          echo smoke test passed
+          exit /b 0
 
   mingw:
     runs-on: windows-latest
@@ -76,23 +76,23 @@ jobs:
           ./test_sha256.exe
 
       - name: Smoke test SHA-256 exit codes
-        shell: pwsh
+        shell: cmd
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\AntiCheat.exe).Hash.ToLowerInvariant()
-          if ($hash.Length -ne 64) { throw "unexpected hash length: $hash" }
-          Write-Host "SHA-256 AntiCheat.exe = $hash"
-
-          $env:JAVELIN_EXPECTED_SHA256 = $hash
-          & .\AntiCheat.exe
-          $pass = $LASTEXITCODE
-          Write-Host "correct hash exit code: $pass"
-          if ($pass -ne 0) { throw "expected exit 0 for the matching hash, got $pass" }
-
-          $env:JAVELIN_EXPECTED_SHA256 = ('0' * 64)
-          & .\AntiCheat.exe
-          $fail = $LASTEXITCODE
-          Write-Host "wrong hash exit code: $fail"
-          if ($fail -ne 3) { throw "expected exit 3 for a wrong hash, got $fail" }
-
-          Write-Host "smoke test passed"
+          python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('AntiCheat.exe').read_bytes()).hexdigest())" > hash.txt
+          if errorlevel 1 exit /b 1
+          set /p HASH=<hash.txt
+          echo SHA-256 AntiCheat.exe = %HASH%
+          if "%HASH:~64,1%" NEQ "" exit /b 1
+          if "%HASH:~63,1%"=="" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=%HASH%"
+          AntiCheat.exe
+          set "PASS=%ERRORLEVEL%"
+          echo correct hash exit code: %PASS%
+          if not "%PASS%"=="0" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=0000000000000000000000000000000000000000000000000000000000000000"
+          AntiCheat.exe
+          set "FAIL=%ERRORLEVEL%"
+          echo wrong hash exit code: %FAIL%
+          if not "%FAIL%"=="3" exit /b 1
+          echo smoke test passed
+          exit /b 0
