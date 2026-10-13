@@ -1,0 +1,6 @@
+__pycache__/
+AntiCheat.exe
+tests/test_sha256
+*.exe
+*.obj
+*.o

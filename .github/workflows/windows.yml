@@ -1,0 +1,98 @@
+name: Windows
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python unit tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
+
+      - name: Build with MSVC and run SHA-256 vectors
+        shell: cmd
+        run: |
+          set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+          if not exist "%VSWHERE%" exit /b 1
+          for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo vswhere did not find a VC installation
+            exit /b 1
+          )
+          echo Using %VSINSTALL%
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /Fe:AntiCheat.exe AntiCheat.cpp
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /O2 /W3 /Fe:test_sha256.exe tests\test_sha256.cpp
+          if errorlevel 1 exit /b 1
+          test_sha256.exe
+          if errorlevel 1 exit /b 1
+
+      - name: Smoke test SHA-256 exit codes
+        shell: cmd
+        run: |
+          python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('AntiCheat.exe').read_bytes()).hexdigest())" > hash.txt
+          if errorlevel 1 exit /b 1
+          set /p HASH=<hash.txt
+          echo SHA-256 AntiCheat.exe = %HASH%
+          if "%HASH:~64,1%" NEQ "" exit /b 1
+          if "%HASH:~63,1%"=="" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=%HASH%"
+          AntiCheat.exe
+          set "PASS=%ERRORLEVEL%"
+          echo correct hash exit code: %PASS%
+          if not "%PASS%"=="0" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=0000000000000000000000000000000000000000000000000000000000000000"
+          AntiCheat.exe
+          set "FAIL=%ERRORLEVEL%"
+          echo wrong hash exit code: %FAIL%
+          if not "%FAIL%"=="3" exit /b 1
+          echo smoke test passed
+          exit /b 0
+
+  mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build with MinGW and run SHA-256 vectors
+        shell: msys2 {0}
+        run: |
+          set -eu
+          g++ -std=c++17 -O2 -static -o AntiCheat.exe AntiCheat.cpp
+          g++ -std=c++17 -O2 -static -o test_sha256.exe tests/test_sha256.cpp
+          ./test_sha256.exe
+
+      - name: Smoke test SHA-256 exit codes
+        shell: cmd
+        run: |
+          python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('AntiCheat.exe').read_bytes()).hexdigest())" > hash.txt
+          if errorlevel 1 exit /b 1
+          set /p HASH=<hash.txt
+          echo SHA-256 AntiCheat.exe = %HASH%
+          if "%HASH:~64,1%" NEQ "" exit /b 1
+          if "%HASH:~63,1%"=="" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=%HASH%"
+          AntiCheat.exe
+          set "PASS=%ERRORLEVEL%"
+          echo correct hash exit code: %PASS%
+          if not "%PASS%"=="0" exit /b 1
+          set "JAVELIN_EXPECTED_SHA256=0000000000000000000000000000000000000000000000000000000000000000"
+          AntiCheat.exe
+          set "FAIL=%ERRORLEVEL%"
+          echo wrong hash exit code: %FAIL%
+          if not "%FAIL%"=="3" exit /b 1
+          echo smoke test passed
+          exit /b 0
